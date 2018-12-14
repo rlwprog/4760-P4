@@ -16,21 +16,18 @@
 #include <fcntl.h>
 #include <time.h>
 
-#define SHMCLOCKKEY	86868             /* Parent and child agree on common key for clock.*/
-#define MSGQUEUEKEY	68686            /* Parent and child agree on common key for msgqueue.*/
-#define MAXRESOURCEKEY	71657            /* Parent and child agree on common key for resources.*/
+#define SHMCLOCKKEY	86868           /* Parent and child agree on common key for clock.*/
+#define MSGQUEUEKEY	68686  			/* Parent and child agree on common key for msgqueue.*/
 
-#define TERMCONSTANT 2 				// Percent chance that a child process will terminate instead of requesting/releasing a resource
-#define REQUESTCONSTANT 50			// Percent chance that a child process will request a new resource
+#define ACTION 50           		/* Randomized to decide whether process uses full quantum.*/
+#define TERMFACTOR 5 				/* Percent chance that a child process will terminate instead of requesting/releasing a resource */
+#define TERMTHRESHOLD 50000000		/* Amount of time that must pass for process to terminate */
+#define BURSTQUANTUM 100000				/* Max time each process runs in nanoseconds*/
 
 #define PERMS (mode_t)(S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)
 #define FLAGS (O_CREAT | O_EXCL)
 
 static volatile sig_atomic_t childDoneFlag = 0;
-
-// static void setdoneflag(int signo){
-// 	childDoneFlag = 1;
-// }
 
 typedef struct {
 	int seconds;
@@ -40,152 +37,144 @@ typedef struct {
 typedef struct {
 	long mtype;
 	pid_t pid;
-	int msg;
+	int burst;
+	int priority;
+	int pt;
+	int seconds;
+	int nanosecs;
 } mymsg_t;
-
-typedef struct {
-	int resourcesUsed[20];
-} resourceStruct;
 
 //globals
 static int queueid;
-static resourceStruct *maxResources;
-static resourceStruct *allocatedResources;
+
+static clockStruct *startClock;
 static clockStruct *sharedClock;
 static mymsg_t *toParentMsg;
 
 
 int lenOfMessage;
 int shmclock;
-int maxResourceSegment;
 
 int sigHandling();
 int initPCBStructures();
 static void endChild(int signo);
 void tearDown();
 
+int diffFromSharedClock(int seconds, int nanosecs);
+int convertToNano(int seconds, int nanosecs);
+
+
 int main (int argc, char *argv[]){
 
 	srand(time(NULL) + getpid());
 
 	pid_t pid = getpid();
-	int i;
-	int resIndex;
-	int randomResourceChoice;
-	int randomActionTaken;
-	int resCount = 0;
+
+	int totalTime = 0;
+	int randomActionTaken = 0;
+	int pTableId = 0;
+	int queuePriority = 0;
+	int burstTime = 0;
+	int clockDifference = 0;
 
 
 	sigHandling();
 	initPCBStructures();
 
-    // printf("Child process enterred: %d\n", pid);
+	// gets first message from parent
+	msgrcv(queueid, toParentMsg, lenOfMessage, pid, 0);
+	printf("Child %d received processIndex of %d\n", pid, toParentMsg->pt);
+
+	pTableId = toParentMsg->pt;
+	queuePriority = toParentMsg->priority;
+
+	startClock->seconds = toParentMsg->seconds;
+	startClock->nanosecs = toParentMsg->nanosecs;
 
 	while(!childDoneFlag){
 			randomActionTaken = rand() % 100;
-			// printf("Child %d randomly selects the action %d\n", pid, randomActionTaken);
 
-			// child terminates
-			if(randomActionTaken < TERMCONSTANT){
+			totalTime = diffFromSharedClock(startClock->seconds, startClock->nanosecs);
+			
+			// process randomly decides action
+			if(randomActionTaken < TERMFACTOR && (totalTime > TERMTHRESHOLD)){
 				childDoneFlag = 1;
+				
 				//send termination status to parent to deallocated resources
-				// printf("\nChild %d terminated!\n\n", pid);
 				toParentMsg->mtype = 1;
 				toParentMsg->pid = pid;
-				toParentMsg->msg = 0;
+				toParentMsg->burst = burstTime;
+				toParentMsg->priority = queuePriority;
+				toParentMsg->pt = pTableId;
+				toParentMsg->seconds = childClock->seconds;
+				toParentMsg->nanosecs = childClock->nanosecs;
+
 				msgsnd(queueid, toParentMsg, lenOfMessage, 1);
-				if (msgrcv(queueid, toParentMsg, lenOfMessage, pid, 0) != -1){
-					allocatedResources->resourcesUsed[randomResourceChoice] += 1;
-				}
+				// if (msgrcv(queueid, toParentMsg, lenOfMessage, pid, 0) != -1){
+				// }
 
-				//request resource
-			} else if (randomActionTaken >= TERMCONSTANT && randomActionTaken < REQUESTCONSTANT){
-				randomResourceChoice = rand() % 20;
-				if ((allocatedResources->resourcesUsed[randomResourceChoice]) < (maxResources->resourcesUsed[randomResourceChoice]) && allocatedResources->resourcesUsed[randomResourceChoice] < 1){
-					toParentMsg->mtype = 3;
-					toParentMsg->pid = pid;
-					toParentMsg->msg = randomResourceChoice;
-					// printf("Child %d asks for resource %d\n", pid, randomResourceChoice);
-					msgsnd(queueid, toParentMsg, lenOfMessage, 3);
-					if (msgrcv(queueid, toParentMsg, lenOfMessage, pid, 0) != -1){
-						allocatedResources->resourcesUsed[randomResourceChoice] += 1;
-						resCount += 1;
-					}
-
+			// if less, get full quantum
+			} else if (randomActionTaken < ACTION){
+				// low priority
+				if (queuePriority == 1){
+					burstTime = (BURSTQUANTUM);
+				} else {
+					burstTime = (BURSTQUANTUM / 2);
 				}
-				// release randomly selected resource
+			// if more, get partial quantum	
 			} else {
-				if(resCount > 0){
-					resIndex = 0;
-					randomResourceChoice = rand() % resCount;
-					for(i = 0; i < 20; i++){
-						if(allocatedResources->resourcesUsed[i] > 0){
-							if (resIndex == randomResourceChoice){
-								// printf("Child %d deallocates resource %d resource count: %d\n", pid, i, resCount);
-
-								toParentMsg->mtype = 2;
-								toParentMsg->pid = pid;
-								toParentMsg->msg = i;
-								// printf("Child %d asks to dealocate resource %d\n", pid, randomResourceChoice);
-								msgsnd(queueid, toParentMsg, lenOfMessage, 2);
-								if (msgrcv(queueid, toParentMsg, lenOfMessage, pid, 0) != -1){
-									allocatedResources->resourcesUsed[i] -= 1;
-									resCount -= 1;
-									i = 20;
-
-								}
-								
-							} else {
-								resIndex += 1;
-							}
-						}
-					}
-				}	
+				if (queuePriority == 1){
+					burstTime = (rand() % BURSTQUANTUM) + 1;
+				} else {
+					burstTime = (rand() % (BURSTQUANTUM / 2));
+				}
 			}
 
+			clockDifference = diffFromSharedClock(startClock->seconds, startClock->nanosecs);
+			while(clockDifference < burstTime){
+				clockDifference = diffFromSharedClock(startClock->seconds, startClock->nanosecs);
+			}
+			toParentMsg->seconds = sharedClock->seconds;
+			toParentMsg->nanosecs = sharedClock->nanosecs;
+			toParentMsg->pid = pid;
+			toParentMsg->burst = burstTime;
+			toParentMsg->priority = queuePriority;
+			toParentMsg->pt = pTableId;
 
+			// low priority
+			if (queuePriority == 1){
+				toParentMsg->mtype = 3;
+				
+				msgsnd(queueid, toParentMsg, lenOfMessage, 3);
+				if (msgrcv(queueid, toParentMsg, lenOfMessage, pid, 0) != -1){
+					printf("Error returning message from parent\n");
+				}
 
-		
-			// printf("Child %d reads clock   %d : %d\n", pid, sharedClock->seconds, sharedClock->nanosecs);
-			if(sharedClock->seconds >= 1000){
-				childDoneFlag = 1;
+				
+			// high priority
+			} else {
+				toParentMsg->mtype = 2;
+				
+				msgsnd(queueid, toParentMsg, lenOfMessage, 2);
+				if (msgrcv(queueid, toParentMsg, lenOfMessage, pid, 0) != -1){
+					printf("Error returning message from parent\n");
+				}
 			}
 		
-	}
-
 	
-	// msgrcv(queueid, toParentMsg, lenOfMessage, 1, 0);
-	// printf("Received message in child %d: %d\n", pid, ctopMsg->msg);
-
-	printf("End of child %d: [", pid);
-	for (i = 0; i < 20; i++){
-		printf("%d,", allocatedResources->resourcesUsed[i]);
-	}
-	printf("]\n");
+		}
+	
+	
 	exit(1);
 	return 1;
-
-
 }
+
 int initPCBStructures(){
-	// init clock
+	// init clocks
 	shmclock = shmget(SHMCLOCKKEY, sizeof(clockStruct), 0666 | IPC_CREAT);
 	sharedClock = (clockStruct *)shmat(shmclock, NULL, 0);
 
-	//init resources
-	maxResourceSegment = shmget(MAXRESOURCEKEY, (sizeof(resourceStruct) + 1), 0666 | IPC_CREAT);
-	maxResources = (resourceStruct *)shmat(maxResourceSegment, NULL, 0);
-	if (maxResourceSegment == -1){
-		return -1;
-	}
-
-	// init allocated resources
-	allocatedResources = malloc(sizeof(resourceStruct));
-	int r;
-	for (r = 0; r < 20; r++){
-		allocatedResources->resourcesUsed[r] = 0;
-	}
-
+	startClock = malloc(sizeof(clockStruct));
 
 	//queues
 	queueid = msgget(MSGQUEUEKEY, PERMS | IPC_CREAT);
@@ -197,16 +186,12 @@ int initPCBStructures(){
 	toParentMsg = malloc(sizeof(mymsg_t));
 	lenOfMessage = sizeof(mymsg_t) - sizeof(long);
 
-	
-
-
 	return 0;
 }
 
 void tearDown(){
-	shmdt(clock);
-	shmdt(maxResources);
-
+	shmdt(sharedClock);
+	shmctl(shmclock, IPC_RMID, NULL);
  	msgctl(queueid, IPC_RMID, NULL);
 }
 
@@ -240,7 +225,25 @@ int sigHandling(){
 
 static void endChild(int signo){
 		childDoneFlag = 1;
-		
+}
 
+int diffFromSharedClock(int seconds, int nanosecs){
+	int diffNano = sharedClock->nanosecs - nanosecs;
+	int diffSecs = sharedClock->seconds - seconds;
+
+	if (diffNano < 0){
+		diffNano = diffNano * -1;
+		diffSecs -= 1;
+	}
+	diffNano = convertToNano(diffSecs, diffNano);
+
+	return diffNano;
+
+
+}
+
+int convertToNano(int seconds, int nanosecs){
+	int totalNano = nanosecs + (1000000000 * seconds);
+	return totalNano;
 }
 
