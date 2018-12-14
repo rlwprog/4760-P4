@@ -1,0 +1,19 @@
+Cmp Sci 4760 Project 4
+
+This project simulates Process Scheduling as per instructions for Project 4 in Operating Systems Cmp Sci 4760 at UMSl (instructions provided)
+
+The scheduler randomly spawns off user processes (max 18 per school server limitations) into either a high or low priority queue. All process info is stored in local Process Control Block. 
+
+Concerning user process operation, I followed the instructions under the "User Processes" section since there were contradictory instructions for what to do insdie of each user process. 
+
+When scheduled, each user process randomly decides whether to run for it's full time quantum passed when created (based on whether low or high priority). It then signals back to the scheduler its burst info for the PCB. If a process has run for over 50 milliseconds total, it also randomly decides whether it should terminate itself or not.
+
+Once a process signals back to the scheduler, upon termination the scheduler deallocated PCB structure and logs relevant info to logfile. If process hasn't terminated, relevant info is logged to the logfile and process is put in back of its assigned queue.
+
+Simulation ends when 100 processes have spawned and moved through the system.
+
+To compile type "make"
+
+To run type "./oss"
+
+To clean up excess files type "make clean"
