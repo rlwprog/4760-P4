@@ -1,18 +1,18 @@
 typedef struct {
-	int seconds;
-	int nanosecs;
+	unsigned int seconds;
+	unsigned int nanosecs;
 } clockStruct;
 
-typedef struct {
-	struct pcb processes[18];
-} processTable;
-
-typedef struct pcb {
+typedef struct pcb{
 	int pid;
 	int processPriority;
 	int totalCpuTimeUsed;
 	int totalTimeInSystem;
 } PCB;
+
+typedef struct {
+	struct pcb processes[18];
+} processTable;
 
 typedef struct {
 	long mtype;

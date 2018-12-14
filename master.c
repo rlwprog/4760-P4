@@ -23,7 +23,7 @@
 #define QUANTUM 100000					/* Max time each process runs in nanoseconds*/
 #define PRIORITY 20						/* Likelihood process randomly gets put in high/low priority queue*/
 #define MAXOUTPUT 10000					/* Max lines in output file*/
-#define CLOCKINCREMENTPERROUND 1000		/* Amount clock increments per round*/
+#define CLOCKINCREMENTPERROUND 50000		/* Amount clock increments per round*/
 
 #define PERMS (mode_t)(S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)
 #define FLAGS (O_CREAT | O_EXCL)
@@ -38,13 +38,14 @@ static processTable *procTable;
 static mymsg_t *toParentMsg;
 static int queueid;
 
+int churn;
 int randForkTime;
 int childCounter;
 int shmclock;
 int lenOfMessage;
-int totalDispatches;
-int totalTimeInSystem;
-int totalCpuTimeUsed;
+long int totalDispatches;
+long int totalTimeInSystem;
+long int totalCpuTimeUsed;
 
 int main (int argc, char *argv[]){
 
@@ -60,6 +61,8 @@ int main (int argc, char *argv[]){
     int totalLinecount = 0;
     int waitTime = 0;
 
+    int index = 0;
+    churn = 0;
     totalDispatches = 0;
 	childCounter = 0;
  
@@ -83,6 +86,7 @@ int main (int argc, char *argv[]){
 	
 			childCounter += 1;
 
+
 			// add process to process table
 			toParentMsg->pt = addToProcessTable(childPid);
 			toParentMsg->mtype = childPid;
@@ -101,6 +105,8 @@ int main (int argc, char *argv[]){
 				}
 				totalLinecount += 1;
 			}
+
+			printf("Child Counter: %d Child limit: %d\n", childCounter, childLimit);
 			msgsnd(queueid, toParentMsg, lenOfMessage, 0);
 
 			totalDispatches += 1;
@@ -119,7 +125,7 @@ int main (int argc, char *argv[]){
 				totalLinecount += 2;
 			}
 
-			procTable->processes[toParentMsg->pt].totalTimeInSystem += waitTime;
+			procTable->processes[toParentMsg->pt].totalTimeInSystem += (long)waitTime;
 			totalDispatches += 1;
 
 			if (totalLinecount < MAXOUTPUT){
@@ -132,8 +138,8 @@ int main (int argc, char *argv[]){
 				totalLinecount += 1;
 			}
 
-			procTable->processes[toParentMsg->pt].totalTimeInSystem += toParentMsg->burst;
-			procTable->processes[toParentMsg->pt].totalCpuTimeUsed += toParentMsg->burst;
+			procTable->processes[toParentMsg->pt].totalTimeInSystem += (long)toParentMsg->burst;
+			procTable->processes[toParentMsg->pt].totalCpuTimeUsed += (long)toParentMsg->burst;
 
 			if (totalLinecount < MAXOUTPUT){
 				fprintf(logfile, "OSS: Putting process with PID %d into queue 0 \n", toParentMsg->pt);
@@ -143,6 +149,7 @@ int main (int argc, char *argv[]){
 			toParentMsg->seconds = sharedClock->seconds;
 			toParentMsg->nanosecs = sharedClock->nanosecs;
 			toParentMsg->mtype = toParentMsg->pid;
+
 			msgsnd(queueid, toParentMsg, lenOfMessage, 0);
 		
 		// process in low priority queue
@@ -156,7 +163,7 @@ int main (int argc, char *argv[]){
 				totalLinecount += 2;
 			}
 
-			procTable->processes[toParentMsg->pt].totalTimeInSystem += waitTime;
+			procTable->processes[toParentMsg->pt].totalTimeInSystem += (long)waitTime;
 
 			if (totalLinecount < MAXOUTPUT){
 				fprintf(logfile, "OSS: Receiving that process with PID %d ran for %d nanoseconds\n", toParentMsg->pt, toParentMsg->burst);
@@ -168,8 +175,8 @@ int main (int argc, char *argv[]){
 				totalLinecount += 1;
 			}
 
-			procTable->processes[toParentMsg->pt].totalTimeInSystem += toParentMsg->burst;
-			procTable->processes[toParentMsg->pt].totalCpuTimeUsed += toParentMsg->burst;
+			procTable->processes[toParentMsg->pt].totalTimeInSystem += (long)toParentMsg->burst;
+			procTable->processes[toParentMsg->pt].totalCpuTimeUsed += (long)toParentMsg->burst;
 
 			if (totalLinecount < MAXOUTPUT){
 				fprintf(logfile, "OSS: Putting process with PID %d into queue 1 \n", toParentMsg->pt);
@@ -188,14 +195,15 @@ int main (int argc, char *argv[]){
 				fprintf(logfile, "OSS: Process with PID %d is terminating at time %d:%d\n", toParentMsg->pt, sharedClock->seconds, sharedClock->nanosecs);
 				totalLinecount += 1;
 			}		
-
-			reinitializeProcessInTable(toParentMsg->pt);
+			// index = toParentMsg->pt;
+			// printf("Reinitializing index %d\n", index);
+			// reinitializeProcessInTable(index);
 		}	
 
         incrementClock(CLOCKINCREMENTPERROUND);
         if (sharedClock->seconds >= 1000){
             sharedClock->nanosecs = 0;
-            doneflag = 1
+            doneflag = 1;
         }
         if(totalChildren >= 99){
            	doneflag = 1; 
@@ -204,6 +212,10 @@ int main (int argc, char *argv[]){
     }
 
     while(childCounter > 0){
+    	int i;
+    	for(i = 0; i < 18; i++){    			
+    		printf("Process %d\n", procTable->processes[i].pid);
+    	}
 
     	printf("Child count: %d\n", childCounter);
     	sleep(2);
@@ -211,12 +223,23 @@ int main (int argc, char *argv[]){
     }
 
 
-	fprintf(logfile, "OSS: Average turnaround time for processes %d:%d \n", ((totalTimeInSystem / totalDispatches) / 1000000000), ((totalTimeInSystem / totalDispatches) % 1000000000));
-	fprintf(logfile, "OSS: Average wait time for processes %d:%d \n", (((totalTimeInSystem - totalCpuTimeUsed) / totalDispatches) / 1000000000), (((totalTimeInSystem - totalCpuTimeUsed) / totalDispatches) % 1000000000));
-	fprintf(logfile, "OSS: The CPU was idle for %d:%d\n", ((totalTimeInSystem - totalCpuTimeUsed) / 1000000000), ((totalTimeInSystem - totalCpuTimeUsed) % 1000000000));
+	fprintf(logfile, "OSS: Average turnaround time for processes %ld:%ld \n", ((totalTimeInSystem / totalDispatches) / 1000000000), ((totalTimeInSystem / totalDispatches) % 1000000000));
+	fprintf(logfile, "OSS: Average wait time for processes %ld:%ld \n", (((totalTimeInSystem - totalCpuTimeUsed) / totalDispatches) / 1000000000), (((totalTimeInSystem - totalCpuTimeUsed) / totalDispatches) % 1000000000));
+	fprintf(logfile, "OSS: The CPU was idle for %ld:%ld\n", ((totalTimeInSystem - totalCpuTimeUsed) / 1000000000), ((totalTimeInSystem - totalCpuTimeUsed) % 1000000000));
+
+	printf("Total System: %ld\n", totalTimeInSystem);
+	printf("Total CPU Time: %ld\n", totalCpuTimeUsed);
+
+
+	printf("OSS: Average turnaround time for processes %ld:%ld \n", ((totalTimeInSystem / totalDispatches) / 1000000000), ((totalTimeInSystem / totalDispatches) % 1000000000));
+	printf("OSS: Average wait time for processes %ld:%ld \n", (((totalTimeInSystem - totalCpuTimeUsed) / totalDispatches) / 1000000000), (((totalTimeInSystem - totalCpuTimeUsed) / totalDispatches) % 1000000000));
+	printf("OSS: The CPU was idle for %ld:%ld\n", ((totalTimeInSystem - totalCpuTimeUsed) / 1000000000), ((totalTimeInSystem - totalCpuTimeUsed) % 1000000000));
 
 
     printf("Final Clock time is at %d:%d\n", sharedClock->seconds, sharedClock->nanosecs);
+    printf("Total process count %d\n", totalChildren);
+    printf("Churn: %d\n", churn);
+    printf("Final fork time %d:%d\n", forkTime->seconds, forkTime->nanosecs);
 
 	tearDown();
 
@@ -269,8 +292,6 @@ int sigHandling(){
 static void endAllProcesses(int signo){
 	doneflag = 1;
 	if(signo == SIGALRM){
-		
-		// printf("]\n\n\n\n\nKILLING ALL PROCESSES!!!!!\n\n\n\n\n\n");
 		killpg(getpgid(getpid()), SIGINT);
 	}
 }
@@ -281,7 +302,8 @@ static void childFinished(int signo){
 		if((finishedpid == -1) && (errno != EINTR)){
 			break;
 		} else {
-			printf("Child %d finished!\n", finishedpid);
+			reinitializeProcessInTable(finishedpid);
+			printf("Child %d finished at time %d:%d\n", finishedpid, sharedClock->seconds, sharedClock->nanosecs);
 			childCounter -= 1;
 		}
 	}
@@ -312,8 +334,8 @@ int initPCBStructures(){
 	forkTime = malloc(sizeof(clockStruct));
 	setForkTimer();
 
-	systemClock -> seconds = 0;
-	systemClock -> nanosecs = 0;
+	sharedClock -> seconds = 0;
+	sharedClock -> nanosecs = 0;
 
 
 	// init process table
@@ -325,10 +347,6 @@ int initPCBStructures(){
 	 	procTable->processes[i].totalCpuTimeUsed = 0;
 	 	procTable->processes[i].totalTimeInSystem = 0;
 
-	}
-
-	for (i = 0; i < 18; i++){
-		printf("Process %d in process table is: %d\n", i, procTable->processes[i].pid);		
 	}
 
 	return 0;
@@ -346,6 +364,7 @@ void tearDown(){
 int addToProcessTable(int newPid){
 	int i;
 	for(i = 0; i < 18; i++){
+		printf("Trying to find available process: %d\n", procTable->processes[i].pid);
 		if(procTable->processes[i].pid < 0){
 			procTable->processes[i].pid = newPid;
 			return i;
@@ -355,35 +374,42 @@ int addToProcessTable(int newPid){
 }
 
 void reinitializeProcessInTable(int finishedPid){
-	totalTimeInSystem += procTable->processes[finishedpid].totalTimeInSystem;
-	totalCpuTimeUsed += procTable->processes[finishedpid].totalCpuTimeUsed;
+	int i;
+	for (i = 0; i < 18; i++){
+		if (procTable->processes[i].pid == finishedPid){
+			totalTimeInSystem += procTable->processes[i].totalTimeInSystem;
+			totalCpuTimeUsed += procTable->processes[i].totalCpuTimeUsed;
 
-	procTable->processes[finishedpid].pid = -1;
-	procTable->processes[finishedpid].processPriority = 0;
-	procTable->processes[finishedpid].totalCpuTimeUsed = 0;
-	procTable->processes[finishedpid].totalTimeInSystem = 0;
+			procTable->processes[i].pid = -1;
+			procTable->processes[i].processPriority = 0;
+			procTable->processes[i].totalCpuTimeUsed = 0;
+			procTable->processes[i].totalTimeInSystem = 0;
+		}
+	}
 }
 
 void incrementClock(int increment){
-	systemClock->nanosecs += increment;
-    if (systemClock->nanosecs >= 1000000000){
-        systemClock->seconds += 1;
-        systemClock->nanosecs = systemClock->nanosecs % 1000000000;
+	sharedClock->nanosecs += increment;
+    if (sharedClock->nanosecs >= 1000000000){
+        sharedClock->seconds += 1;
+        churn += 1;
+        sharedClock->nanosecs = sharedClock->nanosecs % 1000000000;
     } 
 }
 
 int checkIfTimeToFork(){	
-	if ((sharedClock->nanosecs >= forkTime->nanosecs) && (sharedClock->seconds >= forkTime->seconds)){
+	// printf("Check 4\n");
+	if (sharedClock->seconds > forkTime->seconds){
+		return 1;
+	} else if (sharedClock->seconds == forkTime->nanosecs && sharedClock->nanosecs >= forkTime->nanosecs){
 		return 1;
 	} else {
-		if(sharedClock->seconds < 2 && sharedClock->nanosecs % 100000000 == 0){
-	}
 		return 0;
 	}
 }
 
 void setForkTimer(){
-	randForkTime = (rand() % 2000) * 1000000;
+	randForkTime = (rand() % 2000) * 1000;
 
 	forkTime->nanosecs = sharedClock->nanosecs + randForkTime;
 	forkTime->seconds = sharedClock->seconds;
@@ -398,7 +424,7 @@ int decidePriority(){
 	randForkTime = rand() % 100;
 
 	// priority queue
-	if (randForkTime < PRIORITYCONSTANT){
+	if (randForkTime < PRIORITY){
 		//high priority
 		return 0;
 	} else {

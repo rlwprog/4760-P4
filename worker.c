@@ -20,9 +20,9 @@
 #define MSGQUEUEKEY	68686  			/* Parent and child agree on common key for msgqueue.*/
 
 #define ACTION 50           		/* Randomized to decide whether process uses full quantum.*/
-#define TERMFACTOR 5 				/* Percent chance that a child process will terminate instead of requesting/releasing a resource */
-#define TERMTHRESHOLD 50000000		/* Amount of time that must pass for process to terminate */
-#define BURSTQUANTUM 100000				/* Max time each process runs in nanoseconds*/
+#define TERMFACTOR 2 				/* Percent chance that a child process will terminate instead of requesting/releasing a resource */
+#define TERMTHRESHOLD 5000000		/* Amount of time that must pass for process to terminate */
+#define BURSTQUANTUM 100000		/* Max time each process runs in nanoseconds*/
 
 #define PERMS (mode_t)(S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)
 #define FLAGS (O_CREAT | O_EXCL)
@@ -30,8 +30,8 @@
 static volatile sig_atomic_t childDoneFlag = 0;
 
 typedef struct {
-	int seconds;
-	int nanosecs;
+	unsigned int seconds;
+	unsigned int nanosecs;
 } clockStruct;
 
 typedef struct {
@@ -100,18 +100,19 @@ int main (int argc, char *argv[]){
 			if(randomActionTaken < TERMFACTOR && (totalTime > TERMTHRESHOLD)){
 				childDoneFlag = 1;
 				
+				burstTime =  diffFromSharedClock(startClock->seconds, startClock->nanosecs);
+
 				//send termination status to parent to deallocated resources
 				toParentMsg->mtype = 1;
 				toParentMsg->pid = pid;
 				toParentMsg->burst = burstTime;
 				toParentMsg->priority = queuePriority;
 				toParentMsg->pt = pTableId;
-				toParentMsg->seconds = childClock->seconds;
-				toParentMsg->nanosecs = childClock->nanosecs;
+				toParentMsg->seconds = sharedClock->seconds;
+				toParentMsg->nanosecs = sharedClock->nanosecs;
 
 				msgsnd(queueid, toParentMsg, lenOfMessage, 1);
-				// if (msgrcv(queueid, toParentMsg, lenOfMessage, pid, 0) != -1){
-				// }
+
 
 			// if less, get full quantum
 			} else if (randomActionTaken < ACTION){
@@ -129,7 +130,6 @@ int main (int argc, char *argv[]){
 					burstTime = (rand() % (BURSTQUANTUM / 2));
 				}
 			}
-
 			clockDifference = diffFromSharedClock(startClock->seconds, startClock->nanosecs);
 			while(clockDifference < burstTime){
 				clockDifference = diffFromSharedClock(startClock->seconds, startClock->nanosecs);
@@ -144,26 +144,21 @@ int main (int argc, char *argv[]){
 			// low priority
 			if (queuePriority == 1){
 				toParentMsg->mtype = 3;
-				
 				msgsnd(queueid, toParentMsg, lenOfMessage, 3);
 				if (msgrcv(queueid, toParentMsg, lenOfMessage, pid, 0) != -1){
-					printf("Error returning message from parent\n");
 				}
 
 				
 			// high priority
 			} else {
 				toParentMsg->mtype = 2;
-				
 				msgsnd(queueid, toParentMsg, lenOfMessage, 2);
 				if (msgrcv(queueid, toParentMsg, lenOfMessage, pid, 0) != -1){
-					printf("Error returning message from parent\n");
 				}
 			}
 		
 	
 		}
-	
 	
 	exit(1);
 	return 1;
